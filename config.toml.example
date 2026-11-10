@@ -1,0 +1,8 @@
+[mcp_servers.pleasanter_probe]
+url = "https://gateway.example.com/mcp"
+scopes = ["openid", "aws.cognito.signin.user.admin"]
+startup_timeout_sec = 25
+
+[mcp_servers.pleasanter_probe.oauth]
+client_id = "<ClientId from CloudFormation>"
+callback_port = 38500

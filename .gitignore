@@ -1,0 +1,9 @@
+/.codex/
+/node_modules/
+/cdk.out/
+/cdk.context.json
+/template.json
+__pycache__/
+*.pyc
+.env
+.env.*
