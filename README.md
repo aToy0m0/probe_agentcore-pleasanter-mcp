@@ -17,6 +17,16 @@ Codex CLI ── Cognito発行のアクセストークン ──▶ AgentCore Ga
 
 Gatewayは公開HTTPSエンドポイントです。専用Cognitoクライアントのアクセストークンを要求し、自己登録を無効にしています。モックのFunction URLにはIAM認証を設定しています。インターセプターは `tools/list` でモックの一覧を中継し、`tools/call` でクライアントから渡された予約引数を署名付きの本人情報で置き換えます。
 
+## 構成図
+
+### 実行・認証
+
+![Cognito認証からモックMCPまでの実行経路](docs/architecture/agentcore-mcp-runtime.png)
+
+### デプロイ・検証
+
+![CDKデプロイと検証Lambdaの実行経路](docs/architecture/agentcore-mcp-deployment.png)
+
 ## デプロイ
 
 Node.js、npm、Python 3（`python` コマンド）、AWS認証プロファイルが必要です。このサンプルのデプロイ先は `us-east-1` です。対象アカウントとリージョンでCDKのブートストラップを済ませてください。下の `deployment-profile` は使用するAWSプロファイル名に置き換えます。
