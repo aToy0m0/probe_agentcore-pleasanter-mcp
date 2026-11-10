@@ -37,6 +37,27 @@ CloudFormationが `owner` と `codex` のテストユーザーを作り、Secret
 
 実環境では、Codexがブラウザ認証後にモック固有のツール説明を取得し、`mock___whoami` の結果として `mock-account:owner` を受け取りました。AWS内の検証では、同じツールが `codex` ユーザーに `mock-account:codex` を返すことも確認しています。
 
+## APIキー登録スタック
+
+任意で、既存の検証用CognitoプールにAPIキーの登録画面を追加できます。Gatewayスタックを先にデプロイし、出力の `PoolId` と、そのプールのCognitoログインオリジンを指定します。ログインオリジンには `/oauth2` などのパスを付けません。
+
+```sh
+npm run cdk -- deploy -c registration=true --profile deployment-profile \
+  --parameters UserPoolId=YOUR_USER_POOL_ID \
+  --parameters LoginOrigin=https://YOUR_DOMAIN.auth.us-east-1.amazoncognito.com \
+  --parameters IdentityProvider=COGNITO \
+  --parameters Environment=probe
+```
+
+1. 登録スタック出力の `RegistrationUrl` を開き、Gateway試験と同じCognitoユーザーでログインします。
+2. キーを登録します。Secrets Managerでこの操作が作った `pleasanter-mcp/probe/` 配下のSecretの完全なARNを控えます。検証は最初に1ユーザーで実行してください。
+3. `PROBE_REGISTERED_SECRET_ARN` にそのARNを設定し、Gatewayスタックを再デプロイします。Codex接続で `PROBE_CALLBACK_URL` を設定していた場合は、その値も維持します。
+4. 無効なテスト値で登録した場合は `python verify_codex.py --registered-key-failure` を実行します。その後、`owner` であればGatewayスタック出力 `OwnerSecret` の `apiKey` を登録画面で上書きし、`python verify_codex.py --registered-key-success` を実行します。ログインしたユーザーに対応するモック用キーを使ってください。
+
+アダプターは、Cognitoで確認した本人に対応する登録済みSecretを読み、モックMCPに渡します。失敗時はモックのHTTP 403、成功時は `mock-account:owner` をCodexで確認できます。検証にはモック用キーとダミー値を使います。
+
+両スタックを片付ける場合は、先に `npm run cdk -- destroy -c registration=true --profile deployment-profile` で登録スタックを削除します。登録操作で作成したSecretはスタック削除後も残るので、検証で作成したSecretをSecrets Managerで個別に削除してください。
+
 ## 後片付け
 
 `npm run cdk -- destroy --profile deployment-profile` で検証スタックを削除します。テストユーザー、シークレット、Lambda、ロググループなどが削除対象です。KMS鍵は7日間の削除待ちに入ります。CDKの共有ブートストラップリソースと、そこに発行したテンプレート資産は検証スタックとは別管理です。

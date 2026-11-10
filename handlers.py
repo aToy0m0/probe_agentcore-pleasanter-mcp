@@ -7,6 +7,7 @@ import json
 import os
 import time
 import urllib.request
+from urllib.error import HTTPError
 
 import boto3
 from botocore.auth import SigV4Auth
@@ -66,6 +67,8 @@ def intercept(event, context):
             raise ValueError("Unexpected tool")
         payload = {"iss": claims["iss"], "sub": attributes["sub"],
                    "user": user["Username"], "method": method, "exp": int(time.time()) + 30}
+        if method == "tools/call":
+            payload["testRegisteredKey"] = body["params"].get("arguments", {}).get("testRegisteredKey") is True
         signing_input = encode(JWS_HEADER) + b"." + encode(json.dumps(payload).encode())
         signature = boto3.client("kms").sign(
             KeyId=os.environ["SIGNING_KEY"], Message=signing_input,
@@ -125,16 +128,38 @@ def adapt(event, context):
     except (ValueError, KeyError, AttributeError, ClientError):
         raise ValueError("Signed probe identity or API key binding rejected") from None
 
-    call_mock("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
-                             "clientInfo": {"name": "probe-adapter", "version": "1"}},
-              record["apiKey"], 1)
-    call_mock("notifications/initialized", {}, record["apiKey"])
+    api_key = record["apiKey"]
+    use_registered_key = claims["method"] == "tools/call" and claims.get("testRegisteredKey") is True
+    if use_registered_key:
+        digest = hashlib.sha256((claims["iss"] + "\n" + claims["sub"]).encode()).hexdigest()
+        arn = os.environ.get("REGISTERED_SECRET_ARN", "")
+        if arn.rpartition(":secret:")[2].rpartition("-")[0] != f"pleasanter-mcp/probe/{digest}":
+            return {"isError": True, "content": [{"type": "text", "text": "No registered test key for this user"}]}
+        registered = json.loads(boto3.client("secretsmanager").get_secret_value(
+            SecretId=arn, VersionStage="AWSCURRENT")["SecretString"])
+        if registered.get("state") != "active" or not registered.get("apiKey"):
+            return {"isError": True, "content": [{"type": "text", "text": "Registered test key is inactive"}]}
+        api_key = registered["apiKey"]
+
+    try:
+        call_mock("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                 "clientInfo": {"name": "probe-adapter", "version": "1"}}, api_key, 1)
+        call_mock("notifications/initialized", {}, api_key)
+        if use_registered_key:
+            result = call_mock("tools/call", {"name": "whoami", "arguments": {}}, api_key, 2)
+            print("Registered key probe: mock tool call completed")
+            return result
+    except HTTPError as error:
+        if not use_registered_key or error.code != 403:
+            raise
+        print("Registered key probe: mock HTTP 403")
+        return {"isError": True, "content": [{"type": "text", "text": "Mock rejected registered key (HTTP 403)"}]}
     if claims["method"] == "tools/list":
-        catalog = call_mock("tools/list", {}, record["apiKey"], 2)
+        catalog = call_mock("tools/list", {}, api_key, 2)
         # Gateway can route only the tools registered on its Lambda target.
         return {"tools": [{**tool, "name": "mock___" + tool["name"]}
                           for tool in catalog["tools"] if tool["name"] == "whoami"]}
-    return call_mock("tools/call", {"name": "whoami", "arguments": {}}, record["apiKey"], 2)
+    return call_mock("tools/call", {"name": "whoami", "arguments": {}}, api_key, 2)
 
 
 def mock(event, context):
@@ -155,7 +180,9 @@ def mock(event, context):
                   "serverInfo": {"name": "pleasanter-mock", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [{"name": "whoami", "description": "Return the account identified by the mock API key",
-                             "inputSchema": {"type": "object"}}]}
+                             "inputSchema": {"type": "object", "properties": {
+                                 "testRegisteredKey": {"type": "boolean"},
+                             }}}]}
     elif method == "tools/call" and request["params"]["name"] == "whoami":
         result = {"content": [{"type": "text", "text": "mock-account:" + user}]}
     else:

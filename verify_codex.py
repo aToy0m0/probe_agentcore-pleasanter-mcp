@@ -10,6 +10,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--codex-bin", default="codex.exe")
     parser.add_argument("--account", choices=["codex", "owner"], default="owner")
+    registered_key = parser.add_mutually_exclusive_group()
+    registered_key.add_argument("--registered-key-failure", action="store_true")
+    registered_key.add_argument("--registered-key-success", action="store_true")
     args = parser.parse_args()
     directory = Path(__file__).resolve().parent
     server = "pleasanter_probe"
@@ -50,8 +53,15 @@ def main():
                 raise RuntimeError(f"Codex did not discover the mock catalog (auth={status.get('authStatus')})")
             print("PASS Codex discovered the tool description from the mock MCP server")
             result = request(4, "mcpServer/tool/call", {
-                "threadId": thread_id, "server": server, "tool": tool, "arguments": {},
+                "threadId": thread_id, "server": server, "tool": tool,
+                "arguments": {"testRegisteredKey": True}
+                if args.registered_key_failure or args.registered_key_success else {},
             })
+            if args.registered_key_failure:
+                if "Mock rejected registered key (HTTP 403)" not in json.dumps(result):
+                    raise RuntimeError("Codex did not receive the expected mock rejection")
+                print("PASS Codex received the mock's registered-key rejection (HTTP 403)")
+                return
             marker = "mock-account:" + args.account
             if result.get("isError") or marker not in json.dumps(result):
                 raise RuntimeError("Codex tool call did not return the expected mock account")

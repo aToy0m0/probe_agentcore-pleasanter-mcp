@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -76,6 +77,14 @@ resources["SigningKey"].update(DeletionPolicy="Delete", UpdateReplacePolicy="Del
 issuer = sub("https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${Pool}")
 secrets_env = {"OWNER_SECRET": ref("OwnerSecret"), "CODEX_SECRET": ref("CodexSecret")}
 secrets_read = allow("secretsmanager:GetSecretValue", list(secrets_env.values()))
+registered_arn = os.environ.get("PROBE_REGISTERED_SECRET_ARN")
+if registered_arn and not re.fullmatch(
+    r"arn:aws:secretsmanager:us-east-1:[0-9]{12}:secret:pleasanter-mcp/probe/[0-9a-f]{64}-[A-Za-z0-9]{6}",
+    registered_arn,
+):
+    raise ValueError("PROBE_REGISTERED_SECRET_ARN must identify one registered probe secret")
+registered_env = {"REGISTERED_SECRET_ARN": registered_arn} if registered_arn else {}
+registered_read = [allow("secretsmanager:GetSecretValue", registered_arn)] if registered_arn else []
 code = Path(__file__).with_name("handlers.py").read_text(encoding="utf-8")
 verifier_code = Path(__file__).with_name("verify.py").read_text(encoding="utf-8")
 
@@ -83,9 +92,9 @@ for name, handler, environment, permissions in [
     ("Interceptor", "intercept", {"ISSUER": issuer, "CLIENT_ID": ref("Client"),
                                   "ADAPTER_ARN": attr("Adapter"), "SIGNING_KEY": attr("SigningKey")}, [
         allow("kms:Sign", attr("SigningKey")), allow("lambda:InvokeFunction", attr("Adapter"))]),
-    ("Adapter", "adapt", {**secrets_env, "ISSUER": issuer, "SIGNING_KEY": attr("SigningKey"),
+    ("Adapter", "adapt", {**secrets_env, **registered_env, "ISSUER": issuer, "SIGNING_KEY": attr("SigningKey"),
                           "MOCK_URL": attr("MockUrl", "FunctionUrl")}, [
-        allow("kms:Verify", attr("SigningKey")), secrets_read,
+        allow("kms:Verify", attr("SigningKey")), secrets_read, *registered_read,
         allow("lambda:InvokeFunctionUrl", attr("Mock"), Condition={"StringEquals": {"lambda:FunctionUrlAuthType": "AWS_IAM"}}),
         allow("lambda:InvokeFunction", attr("Mock"), Condition={"Bool": {"lambda:InvokedViaFunctionUrl": "true"}}),
     ]),
@@ -130,7 +139,8 @@ resource("Target", "BedrockAgentCore::GatewayTarget", Name="mock",
                                                 "ToolSchema": {"InlinePayload": [{
              "Name": "whoami", "Description": "Return the mock account selected for the caller",
              "InputSchema": {"Type": "object", "Properties": {
-                 "_gatewayAuth": {"Type": "string", "Description": "Reserved by the Gateway"}
+                 "_gatewayAuth": {"Type": "string", "Description": "Reserved by the Gateway"},
+                 "testRegisteredKey": {"Type": "boolean", "Description": "Test the caller's registered key against the mock"}
              }},
          }]}}}})
 

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pleasanter APIキー登録</title>
+<style>
+body{font:16px/1.65 system-ui,sans-serif;color:#172b3b;background:#f2f5f8;margin:0;padding:8vh 1rem}
+main{max-width:32rem;margin:auto;background:white;border:1px solid #d8e2eb;border-radius:1rem;padding:clamp(1rem,5vw,2rem)}
+h1{font-size:1.65rem;line-height:1.3;margin-top:0}button,input{font:inherit;padding:.5rem .8rem;border:1px solid #8294a4;border-radius:.4rem}
+input{display:block;box-sizing:border-box;width:100%;margin:.35rem 0 1rem}button{cursor:pointer;background:white;color:inherit;margin:.25rem .25rem .25rem 0}
+.primary{background:#174d76;color:white;border-color:#174d76}button:disabled{opacity:.55;cursor:wait}#status{min-height:1.6em}
+</style>
+<main>
+<h1>Pleasanter APIキー登録</h1>
+<p>Pleasanterで自分のAPIキーを発行し、登録してください。MCP Gatewayで自分の権限を使うためのキーです。</p>
+<button id="login" class="primary" type="button" hidden>ログイン</button>
+<section id="registration" hidden>
+<p id="registered"></p>
+<form id="form" autocomplete="off">
+<label for="key">APIキー</label>
+<input id="key" type="password" required maxlength="1024" autocomplete="off" spellcheck="false">
+<button class="primary" type="submit">登録・更新</button>
+<button id="remove" type="button">登録を解除</button>
+<button id="logout" type="button" hidden>ログアウト</button>
+</form>
+</section>
+<p id="status" role="status" aria-live="polite"></p>
+</main>
+<script>
+'use strict';
+const config = __CONFIG__;
+const nativeLogin = config.provider === 'COGNITO';
+const base = '/me/pleasanter-key';
+const callback = location.origin + '/';
+const pendingKey = 'pleasanter-key-oauth';
+const element = id => document.getElementById(id);
+const login = element('login');
+const registration = element('registration');
+const key = element('key');
+const status = element('status');
+const remove = element('remove');
+let accessToken;
+const encode = bytes => btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+
+async function startLogin() {
+  login.disabled = true;
+  try {
+    const state = encode(crypto.getRandomValues(new Uint8Array(32)));
+    const verifier = encode(crypto.getRandomValues(new Uint8Array(32)));
+    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+    sessionStorage.setItem(pendingKey, JSON.stringify({state, verifier}));
+    const query = new URLSearchParams({
+      response_type:'code', client_id:config.client, redirect_uri:callback,
+      scope:config.scopes, state,
+      identity_provider:config.provider, code_challenge:encode(new Uint8Array(hash)),
+      code_challenge_method:'S256'
+    });
+    if (!nativeLogin) query.set('resource', location.origin);
+    location.replace(config.domain + '/oauth2/authorize?' + query);
+  } catch {
+    status.textContent = 'ログインを開始できませんでした。';
+    login.disabled = false;
+  }
+}
+login.onclick = startLogin;
+element('logout').hidden = nativeLogin;
+
+async function api(method, value) {
+  const headers = {Authorization:'Bearer ' + accessToken};
+  const options = {method, headers, cache:'no-store', credentials:'omit'};
+  if (method === 'PUT') {
+    headers['Content-Type'] = 'application/json';
+    options.body = JSON.stringify({apiKey:value});
+  }
+  const response = await fetch(method === 'GET' ? base + '/status' : base, options);
+  if (response.status === 401) {
+    accessToken = undefined;
+    key.value = '';
+    registration.hidden = true;
+    login.hidden = nativeLogin;
+    throw new Error('セッションが終了しました。再ログインしてください。');
+  }
+  if (!response.ok) throw new Error(response.status === 429
+    ? '少し待ってから再試行してください。' : '処理できませんでした。入力内容を確認し、再試行してください。');
+  return response.json();
+}
+
+function showState(result) {
+  element('registered').textContent = result.registered
+    ? '登録済み（更新 ' + new Date(result.updatedAt).toLocaleString('ja-JP') + '）' : '未登録';
+  remove.hidden = !result.registered;
+}
+
+async function change(method, value) {
+  const controls = [...element('form').elements];
+  controls.forEach(control => control.disabled = true);
+  status.textContent = '処理中…';
+  try {
+    showState(await api(method, value));
+    status.textContent = method === 'PUT' ? '登録しました。' : '登録を解除しました。';
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    controls.forEach(control => control.disabled = false);
+  }
+}
+
+element('form').onsubmit = event => {
+  event.preventDefault();
+  const value = key.value;
+  key.value = '';
+  void change('PUT', value);
+};
+remove.onclick = () => {
+  if (confirm('登録を解除しますか？ MCP Gatewayでこのキーを使えなくなります。')) {
+    key.value = '';
+    void change('DELETE');
+  }
+};
+element('logout').onclick = () => {
+  accessToken = undefined;
+  key.value = '';
+  const query = new URLSearchParams({client_id:config.client, logout_uri:callback});
+  location.replace(config.domain + '/logout?' + query);
+};
+
+async function resumeLogin() {
+  const query = new URLSearchParams(location.search);
+  if (!query.has('code') && !query.has('error')) {
+    if (nativeLogin) {
+      status.textContent = 'Cognitoのログイン画面に移動しています。';
+      await startLogin();
+    } else {
+      login.hidden = false;
+    }
+    return;
+  }
+  history.replaceState(null, '', '/');
+  login.disabled = true;
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(pendingKey));
+    sessionStorage.removeItem(pendingKey);
+    if (!pending || pending.state !== query.get('state') || !query.get('code')) {
+      throw new Error('Cognitoからの認証応答を確認できませんでした。');
+    }
+    const response = await fetch(config.domain + '/oauth2/token', {
+      method:'POST', credentials:'omit',
+      body:new URLSearchParams({
+        grant_type:'authorization_code', client_id:config.client, redirect_uri:callback,
+        code:query.get('code'), code_verifier:pending.verifier
+      })
+    });
+    if (!response.ok) throw new Error('Cognitoで認証コードを交換できませんでした。');
+    accessToken = (await response.json()).access_token;
+    if (!accessToken) throw new Error('Cognitoからアクセストークンを取得できませんでした。');
+    showState(await api('GET'));
+    registration.hidden = false;
+    login.hidden = true;
+  } catch (error) {
+    accessToken = undefined;
+    login.hidden = nativeLogin;
+    status.textContent = error.message + ' ページを再読み込みしてください。';
+  } finally {
+    login.disabled = false;
+  }
+}
+void resumeLogin();
+</script>
+</html>
