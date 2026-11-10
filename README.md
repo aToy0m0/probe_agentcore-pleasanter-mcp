@@ -2,19 +2,6 @@
 
 Codex CLIからCognitoでログインし、Amazon Bedrock AgentCore Gateway経由でモックのMCPサーバーを呼び出すサンプルです。ログインしたユーザーごとに、AWS側で別のAPIキーを選びます。MCPサーバーはLambda上で動作し、検証用ツールを1つ提供します。
 
-```text
-Codex CLI ── Cognito発行のアクセストークン ──▶ AgentCore Gateway
-                                                │
-                                  インターセプターが本人情報にKMS署名
-                                                │
-                                  Lambdaアダプターが署名を検証
-                                  Secrets Managerから本人用キーを取得
-                                                │
-                                       IAM署名とAPIキー
-                                                ▼
-                                          モックMCP Lambda
-```
-
 Gatewayは公開HTTPSエンドポイントです。専用Cognitoクライアントのアクセストークンを要求し、自己登録を無効にしています。モックのFunction URLにはIAM認証を設定しています。インターセプターは `tools/list` でモックの一覧を中継し、`tools/call` でクライアントから渡された予約引数を署名付きの本人情報で置き換えます。
 
 ## 構成図
